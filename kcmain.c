@@ -1,18 +1,26 @@
 #include "kc.h"
 #include "kcprivate.h"
+#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <vulkan/vulkan_core.h>
 
+typedef struct vkstruct {
+    VkStructureType type;
+    void* pNext;
+} vkstruct;
 
 typedef struct KC_Internal_Handle {
     VkInstance instance;
     uint32_t version;
+    uint32_t flags;
     VkDevice device;
 } KC_Internal_Handle;
 
 int KC_Init(KC_Handle* handle) {
     VkInstance instance;
     uint32_t version;
+    uint32_t flags;
     VkResult result;
 
     result = vkEnumerateInstanceVersion(&version);
@@ -43,6 +51,40 @@ int KC_Init(KC_Handle* handle) {
     result = vkCreateInstance(&instanceCreateInfo, NULL, &instance);
     if (result != VK_SUCCESS)
         return KC_Error(result);
+
+    uint32_t nphysicalDevices = 0;
+    result = vkEnumeratePhysicalDevices(instance, &nphysicalDevices, NULL);
+    if (result != VK_SUCCESS)
+        return KC_Error(result);
+
+    VkPhysicalDevice* devices = malloc(sizeof(VkPhysicalDevice) * nphysicalDevices);
+    vkEnumeratePhysicalDevices(instance, &nphysicalDevices, devices);
+
+    uint32_t selectedDevice = UINT32_MAX;
+
+    for (uint32_t idx = 0; idx < nphysicalDevices; idx++) {
+        VkPhysicalDeviceProperties tmp = {0};
+        vkGetPhysicalDeviceProperties(devices[idx], &tmp);
+        uint32_t deviceApiVersion = tmp.apiVersion;
+        if (tmp.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU || 
+                tmp.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+            selectedDevice = idx;
+            break;
+        }
+    }
+
+    if (selectedDevice == UINT32_MAX)
+        return KC_NO_SUITABLE_DEVICE;
+
+    VkPhysicalDeviceProperties devProps = {0};
+    vkGetPhysicalDeviceProperties(devices[selectedDevice], &devProps);
+    VkPhysicalDeviceLimits limits = devProps.limits;
+    printf("MaxStorageBufferSize = %u\n", limits.maxStorageBufferRange);
+    printf("MaxPushConstantSize = %u\n", limits.maxPushConstantsSize);
+    printf("MaxMemoryAllocationCount = %u\n", limits.maxMemoryAllocationCount);
+    printf("MaxBoundDescriptorSets = %u\n", limits.maxBoundDescriptorSets);
+    printf("MaxDescriptorSetStorageBuffers = %u\n", limits.maxDescriptorSetStorageBuffers);
+    printf("MaxComputeWorkGroupCount = %u %u %u\n", limits.maxComputeWorkGroupCount[0], limits.maxComputeWorkGroupCount[1], limits.maxComputeWorkGroupCount[2]);
 
     KC_Internal_Handle* ret = malloc(sizeof(KC_Internal_Handle));
     ret->instance = instance;
