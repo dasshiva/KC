@@ -1,8 +1,10 @@
 #include "kc.h"
 #include "kcprivate.h"
+#include <stdint.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <vulkan/vulkan_core.h>
 
 typedef struct vkstruct {
@@ -14,7 +16,10 @@ typedef struct KC_Internal_Handle {
     VkInstance instance;
     uint32_t version;
     uint32_t flags;
+    uint32_t qf;
     VkDevice device;
+    VkPhysicalDeviceLimits limits;
+    VkQueue queue;
 } KC_Internal_Handle;
 
 int KC_Init(KC_Handle* handle) {
@@ -79,17 +84,64 @@ int KC_Init(KC_Handle* handle) {
     VkPhysicalDeviceProperties devProps = {0};
     vkGetPhysicalDeviceProperties(devices[selectedDevice], &devProps);
     VkPhysicalDeviceLimits limits = devProps.limits;
-    printf("MaxStorageBufferSize = %u\n", limits.maxStorageBufferRange);
-    printf("MaxPushConstantSize = %u\n", limits.maxPushConstantsSize);
-    printf("MaxMemoryAllocationCount = %u\n", limits.maxMemoryAllocationCount);
-    printf("MaxBoundDescriptorSets = %u\n", limits.maxBoundDescriptorSets);
-    printf("MaxDescriptorSetStorageBuffers = %u\n", limits.maxDescriptorSetStorageBuffers);
-    printf("MaxComputeWorkGroupCount = %u %u %u\n", limits.maxComputeWorkGroupCount[0], limits.maxComputeWorkGroupCount[1], limits.maxComputeWorkGroupCount[2]);
 
+    
     KC_Internal_Handle* ret = malloc(sizeof(KC_Internal_Handle));
     ret->instance = instance;
     ret->version = version;
+    memcpy(&ret->limits, &limits, sizeof(VkPhysicalDeviceLimits));
 
+    float prio = 1.0f;
+    uint32_t queues = 0;
+
+    vkGetPhysicalDeviceQueueFamilyProperties(devices[selectedDevice], &queues, NULL);
+    if (!queues)
+        return KC_DEAD_DEVICE;
+
+    VkQueueFamilyProperties* families = malloc(queues * sizeof(VkQueueFamilyProperties));
+    vkGetPhysicalDeviceQueueFamilyProperties(devices[selectedDevice], &queues, families);
+
+    uint32_t selectedQueueFamily = UINT32_MAX;
+    for (uint32_t idx = 0; idx < queues; idx++) {
+        VkQueueFamilyProperties family = families[idx];
+        if (family.queueFlags & (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)) {
+            selectedQueueFamily = idx;
+            break;
+        }
+    }
+
+    if (selectedQueueFamily == UINT32_MAX)
+        return KC_NO_COMPUTE_SUPPORT;
+
+    VkDeviceQueueCreateInfo deviceQueueCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .queueFamilyIndex = selectedQueueFamily,
+        .queueCount = 1,
+        .pQueuePriorities = &prio
+    };
+
+    VkDeviceCreateInfo deviceCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &deviceQueueCreateInfo,
+        .enabledLayerCount = 0,
+        .ppEnabledLayerNames = NULL,
+        .enabledExtensionCount = 0,
+        .ppEnabledExtensionNames = NULL,
+        .pEnabledFeatures = NULL
+    };
+
+    result = vkCreateDevice(devices[selectedDevice], &deviceCreateInfo, NULL, &ret->device);
+    if (result != VK_SUCCESS)
+        return KC_Error(result);
+
+    ret->qf = selectedQueueFamily;
+    vkGetDeviceQueue(ret->device, ret->qf, 0, &ret->queue);
+    
     *handle = ret;
     return KC_SUCCESS;
 }
